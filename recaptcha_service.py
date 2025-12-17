@@ -63,13 +63,12 @@ class RecaptchaService:
         
         Args:
             headless: 是否使用无头模式
-                     None: 自动检测（Docker环境默认True，本地默认False）
+                     None: 强制使用无头模式（True）
         """
         import os
+        # 强制使用无头模式
         if headless is None:
-            headless = os.getenv("PLAYWRIGHT_HEADLESS", "false").lower() == "true" or \
-                      os.path.exists("/.dockerenv") or \
-                      os.getenv("CI") == "true"
+            headless = True
         self.headless = headless
         self.playwright = None
         self.browser: Optional[Browser] = None
