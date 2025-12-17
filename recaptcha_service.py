@@ -154,7 +154,9 @@ class RecaptchaService:
                     # 即使页面加载失败，也继续尝试（可能脚本已注入）
                 
                 # 优化3: 使用 wait_for_function 替代轮询，更高效
+                # 如果超时，再使用轮询作为后备方案，确保在远程环境也能正常工作
                 debug_logger.log_info("[RecaptchaService] 等待reCAPTCHA初始化...")
+                grecaptcha_ready = False
                 try:
                     await page.wait_for_function(
                         """() => {
@@ -163,29 +165,66 @@ class RecaptchaService:
                         }""",
                         timeout=15000  # 最多等待15秒
                     )
-                    debug_logger.log_info("[RecaptchaService] reCAPTCHA 已准备好")
+                    grecaptcha_ready = True
+                    debug_logger.log_info("[RecaptchaService] reCAPTCHA 已准备好（wait_for_function）")
                 except Exception as e:
-                    debug_logger.log_warning(f"[RecaptchaService] reCAPTCHA初始化超时: {str(e)}")
-                    # 继续尝试执行，可能已经准备好了
+                    debug_logger.log_warning(f"[RecaptchaService] wait_for_function 超时: {str(e)}，使用轮询作为后备...")
+                    # 如果 wait_for_function 超时，使用轮询作为后备方案
+                    for i in range(20):  # 最多再等待10秒（每次0.5秒）
+                        grecaptcha_ready = await page.evaluate("""
+                            () => {
+                                return window.grecaptcha && 
+                                       typeof window.grecaptcha.execute === 'function';
+                            }
+                        """)
+                        if grecaptcha_ready:
+                            debug_logger.log_info(f"[RecaptchaService] reCAPTCHA 已准备好（轮询，等待了 {i*0.5} 秒）")
+                            break
+                        await asyncio.sleep(0.5)
+                    
+                    if not grecaptcha_ready:
+                        debug_logger.log_warning("[RecaptchaService] reCAPTCHA初始化超时，继续尝试执行...")
+                
+                # 额外等待一下确保完全初始化（特别是远程环境可能需要更多时间）
+                if grecaptcha_ready:
+                    await page.wait_for_timeout(500)  # 等待500ms确保稳定
             
-                # 优化4: 简化执行逻辑，减少不必要的等待
+                # 优化4: 简化执行逻辑，但在执行前再次确认 grecaptcha 已准备好
                 debug_logger.log_info("[RecaptchaService] 执行reCAPTCHA验证...")
                 token = await page.evaluate("""
                     async (websiteKey) => {
                         try {
-                            // 检查 grecaptcha 是否存在且有 execute 方法
+                            // 再次检查 grecaptcha 是否存在
                             if (!window.grecaptcha) {
                                 return {error: 'window.grecaptcha 不存在'};
                             }
                             
+                            // 如果 execute 不是函数，尝试等待 ready
                             if (typeof window.grecaptcha.execute !== 'function') {
-                                return {error: 'window.grecaptcha.execute 不是函数'};
+                                // 尝试等待 ready 回调
+                                if (window.grecaptcha.ready && typeof window.grecaptcha.ready === 'function') {
+                                    await new Promise((resolve, reject) => {
+                                        const timeout = setTimeout(() => {
+                                            reject(new Error('grecaptcha.ready 超时'));
+                                        }, 5000);
+                                        window.grecaptcha.ready(() => {
+                                            clearTimeout(timeout);
+                                            resolve();
+                                        });
+                                    });
+                                    // ready 完成后，再次检查 execute
+                                    if (typeof window.grecaptcha.execute !== 'function') {
+                                        return {error: 'window.grecaptcha.execute 不是函数（ready后仍然不是函数）'};
+                                    }
+                                } else {
+                                    return {error: 'window.grecaptcha.execute 不是函数，且 ready 方法不存在'};
+                                }
                             }
                             
-                            // 优化：如果 ready 存在，等待它，否则直接执行（减少等待时间）
+                            // 确保 ready 完成（如果存在）
                             if (window.grecaptcha.ready && typeof window.grecaptcha.ready === 'function') {
                                 await new Promise((resolve, reject) => {
-                                    const timeout = setTimeout(() => resolve(), 5000); // 最多等待5秒
+                                    const timeout = setTimeout(() => resolve(), 3000); // 最多等待3秒
                                     window.grecaptcha.ready(() => {
                                         clearTimeout(timeout);
                                         resolve();
