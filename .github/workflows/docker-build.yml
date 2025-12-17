@@ -7,14 +7,41 @@ on:
       - master
     tags:
       - 'v*'
+    paths:
+      # 主应用相关文件
+      - 'src/**'
+      - 'main.py'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'config/**'
+      - 'static/**'
+      - '.github/workflows/docker-build.yml'
+      # 排除reCAPTCHA服务相关文件
+      - '!recaptcha_service.py'
+      - '!Dockerfile.recaptcha-service'
+      - '!requirements-recaptcha-service.txt'
+      - '!.github/workflows/recaptcha-service-deploy.yml'
   pull_request:
     branches:
       - main
       - master
+    paths:
+      - 'src/**'
+      - 'main.py'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'config/**'
+      - 'static/**'
+      - '.github/workflows/docker-build.yml'
+      - '!recaptcha_service.py'
+      - '!Dockerfile.recaptcha-service'
+      - '!requirements-recaptcha-service.txt'
+      - '!.github/workflows/recaptcha-service-deploy.yml'
 
 env:
-  REGISTRY: docker.io
-  IMAGE_NAME: thesmallhancat/flow2api
+  REGISTRY: ghcr.io
+  # 使用 GitHub Container Registry (ghcr.io)
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push:
@@ -30,12 +57,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
