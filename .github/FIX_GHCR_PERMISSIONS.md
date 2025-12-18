@@ -64,14 +64,43 @@ ERROR: failed to build: failed to solve: failed to push ghcr.io/raomaiping/flow2
 
 ✅ 已更新 workflow 文件，移除了显式权限声明，使用仓库默认权限。
 
-### 4. 如果问题仍然存在
+### 4. 如果问题仍然存在 - 使用 Personal Access Token (PAT)
 
-如果完成上述步骤后问题仍然存在，可以尝试：
+如果移除显式权限声明后仍然失败，强烈建议使用 Personal Access Token：
 
-1. **使用 Personal Access Token (PAT)**：
-   - 创建一个具有 `write:packages` 权限的 PAT
-   - 在仓库 Settings → Secrets and variables → Actions 中添加名为 `GHCR_TOKEN` 的 secret
-   - 在 workflow 文件中使用 `${{ secrets.GHCR_TOKEN }}` 替代 `${{ secrets.GITHUB_TOKEN }}`
+#### 步骤 1: 创建 Personal Access Token
+
+1. 访问：`https://github.com/settings/tokens`
+2. 点击 **"Generate new token"** → **"Generate new token (classic)"**
+3. 设置 Token 名称：例如 `GHCR_PUSH_TOKEN`
+4. 选择过期时间：建议选择较长时间（如 90 天或 1 年）
+5. **重要：勾选以下权限**：
+   - ✅ `write:packages` - 推送和删除包
+   - ✅ `read:packages` - 读取包（可选，但建议勾选）
+6. 点击 **"Generate token"**
+7. **立即复制 token**（只显示一次，无法再次查看）
+
+#### 步骤 2: 添加 Token 到仓库 Secrets
+
+1. 访问：`https://github.com/raomaiping/flow2api/settings/secrets/actions`
+2. 点击 **"New repository secret"**
+3. Name: `GHCR_TOKEN`（必须使用这个名称）
+4. Secret: 粘贴刚才复制的 token
+5. 点击 **"Add secret"**
+
+#### 步骤 3: 更新 workflow 文件
+
+将 `.github/workflows/docker-build.yml` 中的：
+```yaml
+password: ${{ secrets.GITHUB_TOKEN }}
+```
+
+改为：
+```yaml
+password: ${{ secrets.GHCR_TOKEN }}
+```
+
+或者直接使用备选方案文件 `.github/workflows/docker-build.yml.pat` 的内容替换现有文件。
 
 2. **检查是否在正确的分支上运行**：
    - 确保 workflow 在默认分支（main/master）上运行
