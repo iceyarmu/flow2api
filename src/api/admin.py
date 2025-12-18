@@ -85,13 +85,6 @@ class UpdateAdminConfigRequest(BaseModel):
     error_ban_threshold: int
 
 
-class RecaptchaServiceUrlRequest(BaseModel):
-    service_url: str
-
-
-class YescaptchaConfigRequest(BaseModel):
-    enabled: bool
-    client_key: str
 
 
 class ST2ATRequest(BaseModel):
@@ -662,77 +655,6 @@ async def update_token_refresh_enabled(
         "success": True,
         "message": "Flow2API的AT自动刷新默认启用且无法关闭"
     }
-
-
-# ========== reCAPTCHA Service Configuration Endpoints ==========
-
-@router.get("/api/recaptcha-service/config")
-async def get_recaptcha_service_config(token: str = Depends(verify_admin_token)):
-    """Get reCAPTCHA token service configuration"""
-    from ..core.config import config
-    return {
-        "success": True,
-        "config": {
-            "service_url": config.recaptcha_service_url or ""
-        }
-    }
-
-
-@router.post("/api/recaptcha-service/config")
-async def update_recaptcha_service_config(
-    request: RecaptchaServiceUrlRequest,
-    token: str = Depends(verify_admin_token)
-):
-    """Update reCAPTCHA token service URL"""
-    from ..core.config import config
-    try:
-        # Validate URL format (basic check)
-        service_url = request.service_url.strip()
-        if service_url and not (service_url.startswith("http://") or service_url.startswith("https://")):
-            raise HTTPException(status_code=400, detail="服务地址必须以 http:// 或 https:// 开头")
-        
-        config.set_recaptcha_service_url(service_url)
-        config.reload_config()  # Reload to ensure consistency
-        
-        return {"success": True, "message": "reCAPTCHA服务地址配置更新成功"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
-
-
-# ========== Yescaptcha Configuration Endpoints ==========
-
-@router.get("/api/yescaptcha/config")
-async def get_yescaptcha_config(token: str = Depends(verify_admin_token)):
-    """Get Yescaptcha configuration"""
-    from ..core.config import config
-    return {
-        "success": True,
-        "config": {
-            "enabled": config.yescaptcha_enabled,
-            "client_key": config.yescaptcha_client_key or ""
-        }
-    }
-
-
-@router.post("/api/yescaptcha/config")
-async def update_yescaptcha_config(
-    request: YescaptchaConfigRequest,
-    token: str = Depends(verify_admin_token)
-):
-    """Update Yescaptcha configuration"""
-    from ..core.config import config
-    try:
-        client_key = request.client_key.strip()
-        # 只有在启用时才要求client_key不为空
-        if request.enabled and not client_key:
-            raise HTTPException(status_code=400, detail="启用Yescaptcha时，client_key不能为空")
-        
-        config.set_yescaptcha_config(request.enabled, client_key)
-        config.reload_config()  # Reload to ensure consistency
-        
-        return {"success": True, "message": "Yescaptcha配置更新成功"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
 
 
 # ========== Cache Configuration Endpoints ==========
