@@ -21,3 +21,4 @@ EXPOSE 8000
 
 # 使用python -m方式运行，更稳定
 CMD ["python", "-u", "main.py"]
+# Build trigger
