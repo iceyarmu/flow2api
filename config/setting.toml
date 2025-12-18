@@ -35,3 +35,13 @@ error_ban_threshold = 3
 enabled = false
 timeout = 7200  # 缓存超时时间(秒), 默认2小时
 base_url = ""   # 缓存文件访问的基础URL, 留空则使用服务器地址
+
+[yescaptcha]
+enabled = false  # 是否启用yescaptcha获取reCAPTCHA token
+client_key = ""  # yescaptcha平台的API key，从 https://yescaptcha.com/ 获取
+
+[recaptcha]
+# reCAPTCHA token获取方式选择
+# use_self = false   # 是否使用自实现方案（需要安装playwright: pip install playwright && playwright install chromium）
+# 如果启用自实现，会优先使用，失败时回退到yescaptcha
+service_url = "http://127.0.0.1:8001"  # reCAPTCHA Token服务地址

@@ -305,6 +305,5 @@ docker rm recaptcha-service
 ## 相关文档
 
 - [reCAPTCHA Service README](RECAPTCHA_SERVICE_README.md)
-- [快速开始指南](RECAPTCHA_SERVICE_QUICKSTART.md)
-- [测试结果](RECAPTCHA_SERVICE_TEST_RESULTS.md)
+- [测试结果](../tests/results/RECAPTCHA_SERVICE_TEST_RESULTS.md)
 

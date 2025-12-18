@@ -5,7 +5,7 @@
 ## 📚 相关文档
 
 - [部署指南](RECAPTCHA_SERVICE_DEPLOY.md) - 详细部署说明和GitHub Actions配置
-- [测试结果](tests/results/RECAPTCHA_SERVICE_TEST_RESULTS.md) - 服务测试结果
+- [测试结果](../tests/results/RECAPTCHA_SERVICE_TEST_RESULTS.md) - 服务测试结果
 
 ## 特性
 

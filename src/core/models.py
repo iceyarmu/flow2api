@@ -161,3 +161,33 @@ class ChatCompletionRequest(BaseModel):
     # Flow2API specific parameters
     image: Optional[str] = None  # Base64 encoded image (deprecated, use messages)
     video: Optional[str] = None  # Base64 encoded video (deprecated)
+
+
+class ErrorResponse(BaseModel):
+    """Standard error response model"""
+    error: dict
+    
+    class ErrorDetail(BaseModel):
+        """Error detail structure"""
+        message: str
+        type: str
+        code: str
+        status_code: Optional[int] = None
+    
+    @classmethod
+    def create(
+        cls,
+        message: str,
+        error_type: str = "invalid_request_error",
+        code: str = "error",
+        status_code: int = 500
+    ) -> "ErrorResponse":
+        """Create a standardized error response"""
+        return cls(
+            error={
+                "message": message,
+                "type": error_type,
+                "code": code,
+                "status_code": status_code
+            }
+        )

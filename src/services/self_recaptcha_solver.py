@@ -31,7 +31,6 @@ class SelfRecaptchaSolver:
                      True: 强制使用无头模式（适合Docker）
                      False: 强制使用有头模式（适合本地开发）
         """
-        import os
         if headless is None:
             # 自动检测：如果在Docker中或CI环境中，使用无头模式
             headless = os.getenv("PLAYWRIGHT_HEADLESS", "false").lower() == "true" or \

@@ -60,7 +60,7 @@ docker-compose -f docker-compose.warp.yml logs -f
 ```bash
 # 克隆项目
 git clone https://github.com/raomaiping/flow2api.git
-cd sora2api
+cd flow2api
 
 # 创建虚拟环境
 python -m venv venv
@@ -80,12 +80,12 @@ python main.py
 
 ### 首次访问
 
-服务启动后,访问管理后台: **http://localhost:8000**
+服务启动后，访问管理后台: **http://localhost:8000**
 
 - **用户名**: `admin`
 - **密码**: `admin`
 
-⚠️ **重要**: 首次登录后请立即修改密码!
+⚠️ **重要**: 首次登录后请立即修改密码！
 
 ## 📋 支持的模型
 
@@ -134,7 +134,7 @@ python main.py
 | `veo_3_0_r2v_fast_portrait` | 图生视频 | 竖屏 |
 | `veo_3_0_r2v_fast_landscape` | 图生视频 | 横屏 |
 
-## 📡 API 使用示例（需要使用流式）
+## 📡 API 使用示例
 
 ### 文生图
 

@@ -179,5 +179,170 @@ class Config:
             self._config["cache"] = {}
         self._config["cache"]["base_url"] = base_url
 
+    # Yescaptcha configuration
+    @property
+    def yescaptcha_enabled(self) -> bool:
+        """Get yescaptcha enabled status"""
+        return self._config.get("yescaptcha", {}).get("enabled", False)
+
+    @property
+    def yescaptcha_client_key(self) -> str:
+        """Get yescaptcha client key"""
+        return self._config.get("yescaptcha", {}).get("client_key", "")
+
+    def set_yescaptcha_config(self, enabled: bool, client_key: str):
+        """Set yescaptcha configuration"""
+        if "yescaptcha" not in self._config:
+            self._config["yescaptcha"] = {}
+        self._config["yescaptcha"]["enabled"] = enabled
+        self._config["yescaptcha"]["client_key"] = client_key
+        self._write_yescaptcha_config_to_file(enabled, client_key)
+
+    def _write_yescaptcha_config_to_file(self, enabled: bool, client_key: str):
+        """Write yescaptcha configuration to setting.toml file"""
+        config_path = Path(__file__).parent.parent.parent / "config" / "setting.toml"
+        try:
+            # Read current file
+            with open(config_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            
+            # Find and update the yescaptcha section
+            in_yescaptcha_section = False
+            enabled_updated = False
+            client_key_updated = False
+            enabled_line_idx = -1
+            client_key_line_idx = -1
+            
+            for i, line in enumerate(lines):
+                if line.strip().startswith("[yescaptcha]"):
+                    in_yescaptcha_section = True
+                elif line.strip().startswith("[") and not line.strip().startswith("[yescaptcha]"):
+                    # Entered a new section
+                    in_yescaptcha_section = False
+                elif in_yescaptcha_section:
+                    if line.strip().startswith("enabled"):
+                        lines[i] = f'enabled = {str(enabled).lower()}  # 是否启用yescaptcha获取reCAPTCHA token\n'
+                        enabled_updated = True
+                        enabled_line_idx = i
+                    elif line.strip().startswith("client_key"):
+                        lines[i] = f'client_key = "{client_key}"  # yescaptcha平台的API key，从 https://yescaptcha.com/ 获取\n'
+                        client_key_updated = True
+                        client_key_line_idx = i
+            
+            # If we're still in yescaptcha section and didn't update, append at end of section
+            if in_yescaptcha_section:
+                if not enabled_updated:
+                    # Find the position to insert (after [yescaptcha] or after existing lines)
+                    insert_pos = -1
+                    for i in range(len(lines) - 1, -1, -1):
+                        if lines[i].strip().startswith("[yescaptcha]"):
+                            insert_pos = i + 1
+                            break
+                        elif lines[i].strip().startswith("[") and not lines[i].strip().startswith("[yescaptcha]"):
+                            break
+                    if insert_pos >= 0:
+                        lines.insert(insert_pos, f'enabled = {str(enabled).lower()}  # 是否启用yescaptcha获取reCAPTCHA token\n')
+                        enabled_updated = True
+                
+                if not client_key_updated:
+                    # Find the position to insert (after enabled line or at end of section)
+                    insert_pos = enabled_line_idx + 1 if enabled_line_idx >= 0 else -1
+                    if insert_pos < 0:
+                        for i in range(len(lines) - 1, -1, -1):
+                            if lines[i].strip().startswith("[yescaptcha]"):
+                                insert_pos = i + 1
+                                break
+                            elif lines[i].strip().startswith("[") and not lines[i].strip().startswith("[yescaptcha]"):
+                                break
+                    if insert_pos >= 0:
+                        lines.insert(insert_pos, f'client_key = "{client_key}"  # yescaptcha平台的API key，从 https://yescaptcha.com/ 获取\n')
+                        client_key_updated = True
+            
+            # If yescaptcha section doesn't exist, add it
+            if not in_yescaptcha_section and (not enabled_updated or not client_key_updated):
+                lines.append("\n[yescaptcha]\n")
+                lines.append(f'enabled = {str(enabled).lower()}  # 是否启用yescaptcha获取reCAPTCHA token\n')
+                lines.append(f'client_key = "{client_key}"  # yescaptcha平台的API key，从 https://yescaptcha.com/ 获取\n')
+            
+            # Write back to file
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+        except Exception as e:
+            # If file write fails, at least update in-memory config
+            # Log error but don't raise to avoid breaking the app
+            import sys
+            print(f"Warning: Failed to write yescaptcha config to config file: {e}", file=sys.stderr)
+    
+    # Self reCAPTCHA configuration
+    @property
+    def self_recaptcha_enabled(self) -> bool:
+        """Get self-implemented reCAPTCHA enabled status"""
+        return self._config.get("recaptcha", {}).get("use_self", False)
+
+    @property
+    def recaptcha_service_url(self) -> str:
+        """Get reCAPTCHA token service URL"""
+        return self._config.get("recaptcha", {}).get("service_url", "")
+
+    def set_recaptcha_service_url(self, service_url: str):
+        """Set reCAPTCHA token service URL"""
+        if "recaptcha" not in self._config:
+            self._config["recaptcha"] = {}
+        self._config["recaptcha"]["service_url"] = service_url
+        self._write_recaptcha_service_url_to_file(service_url)
+
+    def _write_recaptcha_service_url_to_file(self, service_url: str):
+        """Write recaptcha_service_url to setting.toml file"""
+        config_path = Path(__file__).parent.parent.parent / "config" / "setting.toml"
+        try:
+            # Read current file
+            with open(config_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            
+            # Find and update the service_url line in [recaptcha] section
+            in_recaptcha_section = False
+            updated = False
+            for i, line in enumerate(lines):
+                if line.strip().startswith("[recaptcha]"):
+                    in_recaptcha_section = True
+                elif line.strip().startswith("[") and not line.strip().startswith("[recaptcha]"):
+                    # Entered a new section
+                    if in_recaptcha_section and not updated:
+                        # Insert service_url before leaving recaptcha section
+                        lines.insert(i, f'service_url = "{service_url}"  # reCAPTCHA Token服务地址\n')
+                        updated = True
+                    in_recaptcha_section = False
+                elif in_recaptcha_section and line.strip().startswith("service_url"):
+                    # Update existing service_url line
+                    lines[i] = f'service_url = "{service_url}"  # reCAPTCHA Token服务地址\n'
+                    updated = True
+            
+            # If we're still in recaptcha section and didn't update, append at end of section
+            if in_recaptcha_section and not updated:
+                # Find the last line of recaptcha section (before next section or end of file)
+                for i in range(len(lines) - 1, -1, -1):
+                    if lines[i].strip().startswith("[recaptcha]"):
+                        # Insert after the section header
+                        j = i + 1
+                        while j < len(lines) and (lines[j].strip().startswith("#") or lines[j].strip() == "" or not lines[j].strip().startswith("[")):
+                            j += 1
+                        lines.insert(j, f'service_url = "{service_url}"  # reCAPTCHA Token服务地址\n')
+                        updated = True
+                        break
+            
+            # If recaptcha section doesn't exist, add it
+            if not updated:
+                lines.append("\n[recaptcha]\n")
+                lines.append(f'service_url = "{service_url}"  # reCAPTCHA Token服务地址\n')
+            
+            # Write back to file
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+        except Exception as e:
+            # If file write fails, at least update in-memory config
+            # Log error but don't raise to avoid breaking the app
+            import sys
+            print(f"Warning: Failed to write recaptcha_service_url to config file: {e}", file=sys.stderr)
+
 # Global config instance
 config = Config()

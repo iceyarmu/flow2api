@@ -355,6 +355,17 @@ class GenerationHandler:
         except Exception as e:
             error_msg = f"生成失败: {str(e)}"
             debug_logger.log_error(f"[GENERATION] ❌ {error_msg}")
+            
+            # 检测403错误（reCAPTCHA token获取失败）
+            is_recaptcha_error = False
+            status_code = 500
+            if hasattr(e, 'status_code') and e.status_code == 403:
+                if "reCAPTCHA token获取失败" in str(e) or "recaptcha" in str(e).lower():
+                    is_recaptcha_error = True
+                    status_code = 403
+                    error_msg = f"reCAPTCHA验证失败: 无法获取reCAPTCHA token，请检查reCAPTCHA服务配置"
+                    debug_logger.log_error(f"[GENERATION] ❌ {error_msg}")
+            
             if stream:
                 yield self._create_stream_chunk(f"❌ {error_msg}\n")
             if token:
@@ -362,9 +373,14 @@ class GenerationHandler:
                 if "429" in str(e) or "HTTP Error 429" in str(e):
                     debug_logger.log_warning(f"[429_BAN] Token {token.id} 遇到429错误，立即禁用")
                     await self.token_manager.ban_token_for_429(token.id)
-                else:
+                elif not is_recaptcha_error:  # reCAPTCHA错误不记录为token错误
                     await self.token_manager.record_error(token.id)
-            yield self._create_error_response(error_msg)
+            
+            # 如果是reCAPTCHA错误，返回403错误响应
+            if is_recaptcha_error:
+                yield self._create_error_response(error_msg, status_code=403, error_code="recaptcha_token_failed")
+            else:
+                yield self._create_error_response(error_msg)
 
             # 记录失败日志
             duration = time.time() - start_time
@@ -373,7 +389,7 @@ class GenerationHandler:
                 f"generate_{generation_type if model_config else 'unknown'}",
                 {"model": model, "prompt": prompt[:100], "has_images": images is not None and len(images) > 0},
                 {"error": error_msg},
-                500,
+                status_code,
                 duration
             )
 
@@ -827,15 +843,22 @@ class GenerationHandler:
 
         return json.dumps(response, ensure_ascii=False)
 
-    def _create_error_response(self, error_message: str) -> str:
-        """创建错误响应"""
+    def _create_error_response(self, error_message: str, status_code: int = 500, error_code: str = "generation_failed") -> str:
+        """创建错误响应
+        
+        Args:
+            error_message: 错误消息
+            status_code: HTTP状态码（虽然返回的是JSON字符串，但可以在日志中记录）
+            error_code: 错误代码
+        """
         import json
 
         error = {
             "error": {
                 "message": error_message,
-                "type": "invalid_request_error",
-                "code": "generation_failed"
+                "type": "invalid_request_error" if status_code == 500 else "authentication_error",
+                "code": error_code,
+                "status_code": status_code
             }
         }
 

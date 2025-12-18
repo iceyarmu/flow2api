@@ -52,3 +52,12 @@ logs.txt
 *.tmp
 *.bak
 *.cache
+
+# Test output files
+image_urls_*.txt
+token_*.txt
+logs.txt
+
+# Test results (keep structure but ignore generated files)
+tests/results/*.log
+tests/results/*.tmp

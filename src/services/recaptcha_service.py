@@ -1,68 +1,33 @@
 """
-reCAPTCHA Token 服务
+reCAPTCHA Token 服务（内部集成版本）
 
-保持浏览器持续运行，提供 HTTP API 来获取 reCAPTCHA token
-这样可以避免每次请求都启动浏览器，大幅提升性能
-
-使用方法:
-    python recaptcha_service.py
-
-API:
-    POST /token
-    {
-        "project_id": "your-project-id"
-    }
-    
-    返回:
-    {
-        "success": true,
-        "token": "reCAPTCHA-token-string",
-        "duration_ms": 1234
-    }
+直接在主服务中使用，无需独立的 HTTP 服务
+复用浏览器实例，提供高性能的 reCAPTCHA token 获取
 """
 import asyncio
-import sys
-import io
-from pathlib import Path
 from typing import Optional, Dict, Tuple
 import time
-from contextlib import asynccontextmanager
-
-# 设置 UTF-8 编码（Windows 兼容）
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-
-# 添加项目根目录到路径
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import uvicorn
+import sys
 
 try:
     from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright, Route
 except ImportError:
-    print("❌ Playwright 未安装")
-    print("请运行: pip install playwright && playwright install chromium")
-    sys.exit(1)
+    # Playwright 未安装时，会在使用时抛出错误
+    pass
 
-from src.core.logger import debug_logger
-from src.core.config import config
+from ..core.logger import debug_logger
 
 
 # ========== 常量配置 ==========
 
 # 超时配置（毫秒）
-TIMEOUT_PAGE_LOAD = 15000  # 页面加载超时（优化：从20秒减少到15秒）
+TIMEOUT_PAGE_LOAD = 15000  # 页面加载超时
 TIMEOUT_DOM_LOAD = 5000  # DOM加载超时
-TIMEOUT_RECAPTCHA_READY = 10000  # reCAPTCHA准备超时（优化：从15秒减少到10秒）
-TIMEOUT_POLLING_INTERVAL = 0.3  # 轮询间隔（秒）（优化：从0.5秒减少到0.3秒）
-TIMEOUT_POLLING_MAX_ATTEMPTS = 15  # 最大轮询次数（优化：从20减少到15）
-TIMEOUT_EXECUTION_RETRY = 2000  # 执行重试超时（优化：从3秒减少到2秒）
-TIMEOUT_READY_CALLBACK = 8000  # grecaptcha.ready 回调超时（增加：确保有足够时间加载）
+TIMEOUT_RECAPTCHA_READY = 10000  # reCAPTCHA准备超时
+TIMEOUT_POLLING_INTERVAL = 0.3  # 轮询间隔（秒）
+TIMEOUT_POLLING_MAX_ATTEMPTS = 15  # 最大轮询次数
+TIMEOUT_EXECUTION_RETRY = 2000  # 执行重试超时
+TIMEOUT_READY_CALLBACK = 8000  # grecaptcha.ready 回调超时
 
 # 重试配置
 MAX_EXECUTION_RETRIES = 2  # 最大执行重试次数
@@ -90,8 +55,6 @@ RECAPTCHA_WEBSITE_KEY = "6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV"
 RECAPTCHA_ACTION = 'FLOW_GENERATION'
 RECAPTCHA_SCRIPT_URL = f'https://www.google.com/recaptcha/api.js?render={RECAPTCHA_WEBSITE_KEY}'
 
-
-# ========== 全局浏览器实例管理 ==========
 
 class RecaptchaService:
     """reCAPTCHA Token 服务（复用浏览器实例）"""
@@ -169,14 +132,7 @@ class RecaptchaService:
                 raise
     
     async def _route_handler(self, route: Route) -> None:
-        """路由处理器：拦截并阻止不必要的资源加载
-        
-        优化说明：
-        - 阻止图片、CSS、字体等资源，大幅减少加载时间（可节省 50-70% 的加载时间）
-        - 只允许 HTML、JavaScript 和必要的 API 请求
-        - 这是 Playwright 推荐的性能优化方法
-        - 确保所有 reCAPTCHA 相关请求都被允许
-        """
+        """路由处理器：拦截并阻止不必要的资源加载"""
         request = route.request
         resource_type = request.resource_type
         url = request.url.lower()
@@ -185,7 +141,6 @@ class RecaptchaService:
         allowed_types = {"document", "script", "xhr", "fetch", "websocket"}
         
         # 优先检查：允许所有 reCAPTCHA 和 Google 相关请求（必须）
-        # 包括各种可能的域名和路径
         google_domains = [
             "recaptcha",
             "google.com",
@@ -205,44 +160,30 @@ class RecaptchaService:
             return
         
         # 阻止不必要的资源（图片、CSS、字体、媒体等）
-        # 这些资源对 reCAPTCHA 功能没有影响，但会显著增加加载时间
         if resource_type in {"image", "stylesheet", "font", "media"}:
             await route.abort()
             return
         
         # 对于其他类型，如果 URL 包含关键域名则允许，否则阻止
         if resource_type == "other":
-            # 允许可能需要的其他资源（如 manifest、favicon 等，但可以忽略）
             if any(domain in url for domain in ["google", "labs.google"]):
                 await route.continue_()
             else:
                 await route.abort()
             return
         
-        # 默认继续（安全起见，但这种情况应该很少）
+        # 默认继续（安全起见）
         await route.continue_()
     
     async def _wait_for_page_stable(self, page: Page, timeout: int = TIMEOUT_DOM_LOAD) -> None:
-        """等待页面稳定
-        
-        Args:
-            page: Playwright页面对象
-            timeout: 超时时间（毫秒）
-        """
+        """等待页面稳定"""
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=timeout)
         except Exception as e:
             debug_logger.log_warning(f"[RecaptchaService] 等待页面稳定超时: {str(e)}")
     
     async def _check_grecaptcha_loaded(self, page: Page) -> bool:
-        """检查 reCAPTCHA 是否已加载
-        
-        Args:
-            page: Playwright页面对象
-            
-        Returns:
-            是否已加载
-        """
+        """检查 reCAPTCHA 是否已加载"""
         try:
             return await page.evaluate("""
                 () => {
@@ -254,7 +195,6 @@ class RecaptchaService:
             if "Execution context was destroyed" in str(e):
                 debug_logger.log_warning("[RecaptchaService] 检查脚本时发生导航，等待页面稳定...")
                 await self._wait_for_page_stable(page)
-                # 重试一次
                 try:
                     return await page.evaluate("""
                         () => {
@@ -270,21 +210,9 @@ class RecaptchaService:
                 return False
     
     async def _inject_recaptcha_script(self, page: Page) -> bool:
-        """注入 reCAPTCHA v3 脚本（备用方案，如果上下文注入失败）
-        
-        Args:
-            page: Playwright页面对象
-            
-        Returns:
-            是否注入成功
-        
-        优化说明：
-        - 主要注入在上下文级别完成，这里只是备用方案
-        - 检查脚本是否已存在，避免重复注入
-        """
+        """注入 reCAPTCHA v3 脚本（备用方案）"""
         debug_logger.log_info("[RecaptchaService] 检查并注入 reCAPTCHA v3 脚本（备用方案）...")
         try:
-            # 检查脚本是否已存在
             script_exists = await page.evaluate("""
                 () => {
                     return !!document.querySelector('script[src*="recaptcha/api.js"]');
@@ -295,7 +223,6 @@ class RecaptchaService:
                 debug_logger.log_info("[RecaptchaService] reCAPTCHA 脚本已存在，跳过注入")
                 return True
             
-            # 如果不存在，注入脚本
             script_injected = await page.evaluate(f"""
                 () => {{
                     return new Promise((resolve) => {{
@@ -318,21 +245,9 @@ class RecaptchaService:
             return False
     
     async def _wait_for_recaptcha_ready(self, page: Page) -> bool:
-        """等待 reCAPTCHA 初始化完成
-        
-        Args:
-            page: Playwright页面对象
-            
-        Returns:
-            是否已准备好
-        
-        优化说明：
-        - 使用 wait_for_function 等待，这是 Playwright 推荐的方式
-        - 减少轮询间隔和最大次数，加快响应
-        """
+        """等待 reCAPTCHA 初始化完成"""
         debug_logger.log_info("[RecaptchaService] 等待reCAPTCHA初始化...")
         
-        # 使用 wait_for_function（Playwright 推荐的高效方式）
         try:
             await page.wait_for_function(
                 """() => {
@@ -346,7 +261,6 @@ class RecaptchaService:
         except Exception as e:
             debug_logger.log_warning(f"[RecaptchaService] wait_for_function 超时: {str(e)}，使用轮询作为后备...")
         
-        # 如果 wait_for_function 超时，使用轮询作为后备方案（优化：减少轮询次数和间隔）
         for i in range(TIMEOUT_POLLING_MAX_ATTEMPTS):
             try:
                 grecaptcha_ready = await page.evaluate("""
@@ -373,33 +287,17 @@ class RecaptchaService:
         return False
     
     async def _execute_recaptcha(self, page: Page) -> Dict:
-        """执行 reCAPTCHA 验证
-        
-        Args:
-            page: Playwright页面对象
-            
-        Returns:
-            包含 token 或 error 的字典
-        
-        优化说明：
-        - 简化执行逻辑，直接使用 grecaptcha.ready() 确保 API 已加载
-        - 移除冗余的检查和等待
-        - 根据 reCAPTCHA v3 最佳实践，使用 ready() 回调
-        """
-        # 确保页面稳定
+        """执行 reCAPTCHA 验证"""
         await self._wait_for_page_stable(page, timeout=2000)
         
-        # 重试机制
         for retry in range(MAX_EXECUTION_RETRIES):
             try:
                 token = await page.evaluate(f"""
                     async (websiteKey) => {{
                         try {{
-                            // 使用 grecaptcha.ready() 确保 API 已加载（reCAPTCHA v3 最佳实践）
                             return await new Promise((resolve) => {{
                                 let resolved = false;
                                 
-                                // 执行 reCAPTCHA 的函数
                                 const executeRecaptcha = () => {{
                                     if (resolved) return;
                                     
@@ -415,7 +313,6 @@ class RecaptchaService:
                                         return;
                                     }}
                                     
-                                    // 执行 reCAPTCHA
                                     window.grecaptcha.execute(websiteKey, {{
                                         action: '{RECAPTCHA_ACTION}'
                                     }}).then(token => {{
@@ -431,7 +328,6 @@ class RecaptchaService:
                                     }});
                                 }};
                                 
-                                // 超时保护
                                 const timeoutId = setTimeout(() => {{
                                     if (!resolved) {{
                                         resolved = true;
@@ -441,21 +337,18 @@ class RecaptchaService:
                                     }}
                                 }}, {TIMEOUT_READY_CALLBACK});
                                 
-                                // 如果 grecaptcha 已经可用，直接执行
                                 if (window.grecaptcha && typeof window.grecaptcha.execute === 'function') {{
                                     clearTimeout(timeoutId);
                                     executeRecaptcha();
                                     return;
                                 }}
                                 
-                                // 使用 ready() 等待加载完成
                                 if (window.grecaptcha && window.grecaptcha.ready && typeof window.grecaptcha.ready === 'function') {{
                                     window.grecaptcha.ready(() => {{
                                         clearTimeout(timeoutId);
                                         executeRecaptcha();
                                     }});
                                 }} else {{
-                                    // 如果 ready 不存在，等待 grecaptcha 加载
                                     const checkInterval = setInterval(() => {{
                                         if (resolved) {{
                                             clearInterval(checkInterval);
@@ -475,9 +368,8 @@ class RecaptchaService:
                                                 }});
                                             }}
                                         }}
-                                    }}, 200); // 每 200ms 检查一次
+                                    }}, 200);
                                     
-                                    // 清理定时器
                                     setTimeout(() => {{
                                         clearInterval(checkInterval);
                                     }}, {TIMEOUT_READY_CALLBACK});
@@ -503,58 +395,27 @@ class RecaptchaService:
         return {"error": "执行失败：达到最大重试次数"}
     
     async def _load_page(self, page: Page, url: str) -> None:
-        """加载页面并等待稳定
-        
-        Args:
-            page: Playwright页面对象
-            url: 要加载的URL
-        
-        优化说明：
-        - 移除了 networkidle 等待（Playwright 不推荐使用，会增加不必要的等待时间）
-        - 只等待 domcontentloaded，这已经足够进行后续操作
-        """
+        """加载页面并等待稳定"""
         try:
-            # 使用 'commit' 状态（最快）：收到响应并开始加载文档时即完成
             await page.goto(url, wait_until="commit", timeout=TIMEOUT_PAGE_LOAD)
-            # 然后只等待 DOM 加载完成（比等待所有资源更快）
             await page.wait_for_load_state("domcontentloaded", timeout=TIMEOUT_DOM_LOAD)
         except Exception as e:
             debug_logger.log_warning(f"[RecaptchaService] 页面加载超时或失败: {str(e)}")
-            # 即使超时也尝试继续，至少等待DOM加载
             await self._wait_for_page_stable(page)
     
     async def _ensure_recaptcha_loaded(self, page: Page) -> None:
-        """确保 reCAPTCHA 脚本已加载
-        
-        Args:
-            page: Playwright页面对象
-        
-        优化说明：
-        - 移除不必要的固定等待时间（wait_for_timeout）
-        - 直接等待实际条件满足，而不是固定延迟
-        """
+        """确保 reCAPTCHA 脚本已加载"""
         debug_logger.log_info("[RecaptchaService] 检查并加载 reCAPTCHA v3 脚本...")
         
-        # 检查是否已加载
         script_loaded = await self._check_grecaptcha_loaded(page)
         
         if not script_loaded:
-            # 如果没有加载，注入脚本
             await self._inject_recaptcha_script(page)
         
-        # 等待 reCAPTCHA 初始化完成（移除固定等待，直接等待条件满足）
         await self._wait_for_recaptcha_ready(page)
     
     def _process_token_result(self, token: Dict, duration_ms: float) -> tuple[Optional[str], Optional[str]]:
-        """处理 token 结果
-        
-        Args:
-            token: token 结果字典
-            duration_ms: 耗时（毫秒）
-            
-        Returns:
-            (token字符串, 错误信息)
-        """
+        """处理 token 结果"""
         if isinstance(token, dict):
             if 'token' in token and token['token']:
                 debug_logger.log_info(f"[RecaptchaService] ✅ Token获取成功（耗时 {duration_ms:.0f}ms）")
@@ -565,7 +426,6 @@ class RecaptchaService:
                 debug_logger.log_error(f"[RecaptchaService] Token获取失败: {error_detail}，耗时 {duration_ms:.0f}ms")
                 return None, error_detail
         else:
-            # 兼容旧格式（字符串token）
             if token:
                 debug_logger.log_info(f"[RecaptchaService] ✅ Token获取成功（耗时 {duration_ms:.0f}ms）")
                 return token, None
@@ -580,51 +440,30 @@ class RecaptchaService:
             invalid_project_ids = []
             for project_id, page in self._page_cache.items():
                 try:
-                    # 检查页面是否仍然有效
                     _ = page.url
                 except Exception:
-                    # 页面已关闭，标记为无效
                     invalid_project_ids.append(project_id)
             
-            # 移除无效的页面
             for project_id in invalid_project_ids:
                 del self._page_cache[project_id]
                 debug_logger.log_info(f"[RecaptchaService] 清理无效页面缓存 (project_id: {project_id})")
     
     async def _get_or_create_page(self, project_id: str) -> Page:
-        """获取或创建页面（页面复用优化）
-        
-        Args:
-            project_id: Flow项目ID
-            
-        Returns:
-            Page对象
-            
-        优化说明：
-        - 相同 project_id 复用同一个页面，只需要刷新（比重新加载快 50-70%）
-        - 不同 project_id 创建新页面，但共享同一个上下文（减少上下文创建开销）
-        - 页面保持打开状态，不关闭（减少页面创建开销）
-        """
-        # 定期清理无效页面（每10次请求清理一次，避免频繁检查）
+        """获取或创建页面（页面复用优化）"""
         if len(self._page_cache) > 0 and len(self._page_cache) % 10 == 0:
             await self._cleanup_invalid_pages()
         
         async with self._page_cache_lock:
-            # 检查缓存中是否有该 project_id 的页面
             if project_id in self._page_cache:
                 page = self._page_cache[project_id]
-                # 检查页面是否仍然有效（没有被关闭）
                 try:
-                    # 尝试访问页面 URL 来检查页面是否有效
                     _ = page.url
                     debug_logger.log_info(f"[RecaptchaService] ✅ 复用已存在的页面 (project_id: {project_id[:20]}...)")
                     return page
                 except Exception:
-                    # 页面已关闭，从缓存中移除
                     debug_logger.log_warning(f"[RecaptchaService] ⚠️ 缓存的页面已关闭，创建新页面 (project_id: {project_id[:20]}...)")
                     del self._page_cache[project_id]
             
-            # 创建新页面（使用共享上下文）
             debug_logger.log_info(f"[RecaptchaService] 🆕 创建新页面 (project_id: {project_id[:20]}...，当前缓存页面数: {len(self._page_cache)})")
             page = await self._shared_context.new_page()
             self._page_cache[project_id] = page
@@ -638,34 +477,24 @@ class RecaptchaService:
             
         Returns:
             (reCAPTCHA token字符串, 错误信息)，如果获取失败返回 (None, 错误信息)
-        
-        优化说明：
-        - 使用共享的浏览器上下文（只创建一次）
-        - 相同 project_id 复用页面，只需要刷新（比重新加载快很多）
-        - 不同 project_id 创建新页面，但共享上下文
-        - 页面保持打开状态，不关闭
         """
         if not self._initialized:
             await self.initialize()
         
-        # 使用信号量限制并发
         async with self._semaphore:
             start_time = time.time()
             page: Optional[Page] = None
             
             try:
-                # 获取或创建页面（页面复用优化）
                 page = await self._get_or_create_page(project_id)
                 
                 website_url = f"https://labs.google/fx/tools/flow/project/{project_id}"
                 
-                # 检查页面当前 URL，决定是加载还是刷新
                 try:
                     current_url = page.url
                     is_same_url = current_url == website_url or website_url in current_url
                     
                     if is_same_url:
-                        # 相同 URL，刷新页面（比重新加载快很多）
                         debug_logger.log_info(f"[RecaptchaService] 刷新页面: {website_url}")
                         try:
                             await page.reload(wait_until="commit", timeout=TIMEOUT_PAGE_LOAD)
@@ -674,24 +503,19 @@ class RecaptchaService:
                             debug_logger.log_warning(f"[RecaptchaService] 页面刷新失败，尝试重新加载: {str(e)}")
                             await self._load_page(page, website_url)
                     else:
-                        # 不同 URL，加载新页面
                         debug_logger.log_info(f"[RecaptchaService] 加载新页面: {website_url}")
                         await self._load_page(page, website_url)
                 except Exception:
-                    # 页面可能刚创建，直接加载
                     debug_logger.log_info(f"[RecaptchaService] 首次加载页面: {website_url}")
                     await self._load_page(page, website_url)
                 
-                # 确保 reCAPTCHA 已加载
                 await self._ensure_recaptcha_loaded(page)
                 
-                # 执行 reCAPTCHA 验证
                 debug_logger.log_info("[RecaptchaService] 执行reCAPTCHA验证...")
                 token = await self._execute_recaptcha(page)
                 
                 duration_ms = (time.time() - start_time) * 1000
                 
-                # 处理返回结果
                 return self._process_token_result(token, duration_ms)
                     
             except Exception as e:
@@ -700,12 +524,10 @@ class RecaptchaService:
                 import traceback
                 debug_logger.log_error(f"[RecaptchaService] 异常堆栈: {traceback.format_exc()}")
                 return None, error_detail
-            # 注意：不再关闭页面和上下文，保持打开状态以便复用
     
     async def close(self):
         """关闭浏览器和Playwright"""
         try:
-            # 关闭所有缓存的页面
             async with self._page_cache_lock:
                 for project_id, page in list(self._page_cache.items()):
                     try:
@@ -715,7 +537,6 @@ class RecaptchaService:
                         debug_logger.log_warning(f"[RecaptchaService] 关闭页面失败 (project_id: {project_id}): {str(e)}")
                 self._page_cache.clear()
             
-            # 关闭共享上下文
             if self._shared_context:
                 try:
                     await self._shared_context.close()
@@ -724,12 +545,10 @@ class RecaptchaService:
                 except Exception as e:
                     debug_logger.log_warning(f"[RecaptchaService] 关闭共享上下文失败: {str(e)}")
             
-            # 关闭浏览器
             if self.browser:
                 await self.browser.close()
                 self.browser = None
             
-            # 停止 Playwright
             if self.playwright:
                 await self.playwright.stop()
                 self.playwright = None
@@ -744,187 +563,46 @@ class RecaptchaService:
 _recaptcha_service: Optional[RecaptchaService] = None
 
 
-async def get_service() -> RecaptchaService:
-    """获取全局服务实例"""
+async def get_recaptcha_service() -> Optional[RecaptchaService]:
+    """获取全局 reCAPTCHA 服务实例"""
     global _recaptcha_service
+    
+    # 首先检查 Playwright 是否可用
+    try:
+        from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright, Route
+    except ImportError:
+        debug_logger.log_warning("[RecaptchaService] Playwright 未安装，无法使用 reCAPTCHA 服务")
+        debug_logger.log_info("[RecaptchaService] 请运行: pip install playwright && playwright install chromium")
+        return None
+    
     if _recaptcha_service is None:
-        _recaptcha_service = RecaptchaService()
-        await _recaptcha_service.initialize()
+        try:
+            debug_logger.log_info("[RecaptchaService] 正在初始化 reCAPTCHA 服务...")
+            _recaptcha_service = RecaptchaService()
+            await _recaptcha_service.initialize()
+            debug_logger.log_info("[RecaptchaService] ✅ reCAPTCHA 服务初始化成功")
+        except Exception as e:
+            debug_logger.log_error(f"[RecaptchaService] ❌ 初始化失败: {str(e)}")
+            import traceback
+            debug_logger.log_error(f"[RecaptchaService] 初始化异常详情: {traceback.format_exc()}")
+            _recaptcha_service = None
+            return None
+    
+    # 确保服务已初始化
+    if not _recaptcha_service._initialized:
+        try:
+            debug_logger.log_info("[RecaptchaService] 服务未初始化，正在初始化...")
+            await _recaptcha_service.initialize()
+        except Exception as e:
+            debug_logger.log_error(f"[RecaptchaService] ❌ 初始化失败: {str(e)}")
+            return None
+    
     return _recaptcha_service
 
 
-# ========== FastAPI 应用 ==========
-
-class TokenRequest(BaseModel):
-    """Token 请求模型"""
-    project_id: str
-
-
-class TokenResponse(BaseModel):
-    """Token 响应模型"""
-    success: bool
-    token: Optional[str] = None
-    duration_ms: Optional[float] = None
-    error: Optional[str] = None
-    error_detail: Optional[str] = None  # 详细错误信息
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    # 启动时初始化浏览器
-    print("=" * 60)
-    print("reCAPTCHA Token Service Starting...")
-    print("=" * 60)
-    service = await get_service()
-    print("✅ 服务已就绪")
-    print()
-    
-    yield
-    
-    # 关闭时清理资源
-    print("=" * 60)
-    print("reCAPTCHA Token Service Shutting down...")
-    print("=" * 60)
+async def close_recaptcha_service():
+    """关闭全局 reCAPTCHA 服务实例"""
     global _recaptcha_service
     if _recaptcha_service:
         await _recaptcha_service.close()
-    print("✅ 服务已关闭")
-
-
-app = FastAPI(
-    title="reCAPTCHA Token Service",
-    description="提供 reCAPTCHA v3 token 的 HTTP API 服务（复用浏览器实例）",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/")
-async def root():
-    """根路径"""
-    return {
-        "service": "reCAPTCHA Token Service",
-        "version": "1.0.0",
-        "endpoints": {
-            "POST /token": "获取 reCAPTCHA token",
-            "GET /health": "健康检查"
-        }
-    }
-
-
-@app.get("/health")
-async def health():
-    """健康检查"""
-    global _recaptcha_service
-    if _recaptcha_service and _recaptcha_service._initialized:
-        return {
-            "status": "healthy",
-            "browser_initialized": True,
-            "headless": _recaptcha_service.headless,
-            "cached_pages": len(_recaptcha_service._page_cache)  # 显示缓存的页面数量
-        }
-    else:
-        return {
-            "status": "initializing",
-            "browser_initialized": False
-        }
-
-
-@app.post("/token", response_model=TokenResponse)
-async def get_token(request: TokenRequest):
-    """获取 reCAPTCHA token
-    
-    请求体:
-        {
-            "project_id": "your-project-id"
-        }
-    
-    响应:
-        {
-            "success": true,
-            "token": "reCAPTCHA-token-string",
-            "duration_ms": 1234.56
-        }
-    """
-    start_time = time.time()
-    
-    try:
-        # 验证 project_id
-        if not request.project_id or not request.project_id.strip():
-            return TokenResponse(
-                success=False,
-                error="project_id is required and cannot be empty",
-                duration_ms=(time.time() - start_time) * 1000
-            )
-        
-        project_id_preview = request.project_id[:20] + "..." if len(request.project_id) > 20 else request.project_id
-        debug_logger.log_info(f"[API] 收到获取token请求，project_id: {project_id_preview}")
-        
-        service = await get_service()
-        token, error_detail = await service.get_token(request.project_id.strip())
-        
-        duration_ms = (time.time() - start_time) * 1000
-        
-        if token:
-            debug_logger.log_info(f"[API] Token获取成功，耗时 {duration_ms:.0f}ms")
-            return TokenResponse(
-                success=True,
-                token=token,
-                duration_ms=duration_ms
-            )
-        else:
-            debug_logger.log_warning(f"[API] Token获取失败: {error_detail}，耗时 {duration_ms:.0f}ms")
-            return TokenResponse(
-                success=False,
-                error="Failed to get token",
-                error_detail=error_detail,
-                duration_ms=duration_ms
-            )
-    except Exception as e:
-        duration_ms = (time.time() - start_time) * 1000
-        error_msg = str(e)
-        debug_logger.log_error(f"[API] 获取token异常: {error_msg}")
-        import traceback
-        debug_logger.log_error(f"[API] 异常详情: {traceback.format_exc()}")
-        return TokenResponse(
-            success=False,
-            error=error_msg,
-            duration_ms=duration_ms
-        )
-
-
-def main():
-    """主函数"""
-    import os
-    
-    # 从环境变量获取端口，默认 8001（避免与主服务冲突）
-    port = int(os.getenv("RECAPTCHA_SERVICE_PORT", "8001"))
-    host = os.getenv("RECAPTCHA_SERVICE_HOST", "0.0.0.0")
-    
-    print(f"启动 reCAPTCHA Token Service...")
-    print(f"监听地址: http://{host}:{port}")
-    print(f"API 文档: http://{host}:{port}/docs")
-    print()
-    
-    uvicorn.run(
-        "recaptcha_service:app",
-        host=host,
-        port=port,
-        log_level="info",
-        reload=False  # 生产环境禁用自动重载
-    )
-
-
-if __name__ == "__main__":
-    main()
-
+        _recaptcha_service = None
