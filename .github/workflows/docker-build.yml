@@ -46,11 +46,9 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
-      attestations: write
-      id-token: write
+    # 使用仓库的默认权限（Read and write permissions）
+    # 如果仓库设置了 "Read and write permissions"，则不需要显式声明权限
+    # 显式声明权限可能会覆盖默认设置，导致权限不足
 
     steps:
       - name: Checkout repository
