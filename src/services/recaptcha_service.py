@@ -575,8 +575,9 @@ async def get_recaptcha_service() -> Optional[RecaptchaService]:
     # 首先检查 Playwright 是否可用
     try:
         from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright, Route
-    except ImportError:
-        debug_logger.log_warning("[RecaptchaService] Playwright 未安装，无法使用 reCAPTCHA 服务")
+        debug_logger.log_info("[RecaptchaService] Playwright 模块导入成功")
+    except ImportError as e:
+        debug_logger.log_warning(f"[RecaptchaService] Playwright 未安装，无法使用 reCAPTCHA 服务: {str(e)}")
         debug_logger.log_info("[RecaptchaService] 请运行: pip install playwright && playwright install chromium")
         return None
     
