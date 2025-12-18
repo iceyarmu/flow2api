@@ -37,12 +37,20 @@ class FlowClient:
         self._session_lock = asyncio.Lock()
 
     @asynccontextmanager
-    async def _get_session(self) -> AsyncIterator[AsyncSession]:
-        """获取或创建HTTP session，支持连接重用"""
+    async def _get_session(self, clear_cookies: bool = False) -> AsyncIterator[AsyncSession]:
+        """获取或创建HTTP session，支持连接重用
+        
+        Args:
+            clear_cookies: 如果为True，清除session的cookie jar（用于ST认证，避免cookie污染）
+        """
         async with self._session_lock:
             if self._session is None:
                 self._session = AsyncSession()
             try:
+                if clear_cookies:
+                    # 清除session的cookie jar，避免不同ST之间的cookie污染
+                    if hasattr(self._session, 'cookies'):
+                        self._session.cookies.clear()
                 yield self._session
             except Exception:
                 # 如果session出现问题，在下一次使用时重新创建
@@ -240,7 +248,9 @@ class FlowClient:
 
         for retry_count in range(max_retries + 1):
             try:
-                async with self._get_session() as session:
+                # 如果使用ST认证，清除cookie避免不同token之间的污染
+                clear_cookies = use_st and st_token
+                async with self._get_session(clear_cookies=clear_cookies) as session:
                     if method.upper() == "GET":
                         response = await session.get(
                             url,
