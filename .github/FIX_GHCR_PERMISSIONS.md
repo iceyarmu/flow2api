@@ -58,7 +58,7 @@ ERROR: failed to build: failed to solve: failed to push ghcr.io/raomaiping/flow2
 
 ```yaml
 permissions:
-  contents: read
+  contents: write
   packages: write
   attestations: write
   id-token: write
