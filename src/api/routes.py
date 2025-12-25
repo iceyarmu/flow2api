@@ -212,13 +212,6 @@ async def create_chat_completion(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 尺寸到方向的映射
-SIZE_TO_ORIENTATION = {
-    "1792x1024": "landscape",  # 横屏
-    "1024x1792": "portrait",   # 竖屏
-    "1024x1024": "landscape",  # 正方形默认使用横屏模型
-}
-
 # 默认模型基础名
 DEFAULT_MODEL_BASE = "gemini-2.5-flash-image"
 
@@ -232,6 +225,38 @@ def get_model_base_name(model: str) -> str:
     return model
 
 
+def get_model_orientation_suffix(model: str) -> Optional[str]:
+    """获取模型的方向后缀，如果没有则返回 None"""
+    if model.endswith("-landscape"):
+        return "landscape"
+    elif model.endswith("-portrait"):
+        return "portrait"
+    return None
+
+
+def parse_size_orientation(size: str) -> Optional[str]:
+    """
+    解析 size 字符串，根据宽高判断方向
+    - 宽 > 高: landscape
+    - 高 > 宽: portrait
+    - 宽 == 高 或无法解析: None
+    """
+    if not size:
+        return None
+    try:
+        parts = size.lower().split("x")
+        if len(parts) == 2:
+            width = int(parts[0])
+            height = int(parts[1])
+            if width > height:
+                return "landscape"
+            elif height > width:
+                return "portrait"
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
 @router.post("/v1/images/generations")
 async def create_image(
     request: ImageGenerationRequest,
@@ -239,10 +264,10 @@ async def create_image(
 ):
     """Create image (OpenAI compatible endpoint)
 
-    支持的尺寸:
-    - 1792x1024 (landscape, 横屏)
-    - 1024x1792 (portrait, 竖屏)
-    - 1024x1024 (默认使用横屏模型)
+    支持的尺寸 (自动根据宽高判断横竖屏):
+    - 宽 > 高: landscape (横屏)
+    - 高 > 宽: portrait (竖屏)
+    - 宽 == 高: 默认 landscape
 
     支持的模型 (可省略 -landscape/-portrait 后缀，由 size 决定):
     - gemini-2.5-flash-image / gemini-2.5-flash-image-landscape / gemini-2.5-flash-image-portrait
@@ -250,8 +275,16 @@ async def create_image(
     - imagen-4.0-generate-preview / imagen-4.0-generate-preview-landscape / imagen-4.0-generate-preview-portrait
     """
     try:
-        # 根据 size 确定方向 (size 优先)
-        orientation = SIZE_TO_ORIENTATION.get(request.size, "landscape")
+        # 1. 尝试从 size 解析方向 (优先级最高)
+        orientation = parse_size_orientation(request.size)
+
+        # 2. 如果 size 无法确定方向（正方形或无效），尝试从 model 后缀获取
+        if orientation is None and request.model:
+            orientation = get_model_orientation_suffix(request.model)
+
+        # 3. 如果仍无法确定，默认使用 landscape
+        if orientation is None:
+            orientation = "landscape"
 
         # 获取模型基础名称
         model_base = get_model_base_name(request.model) if request.model else DEFAULT_MODEL_BASE

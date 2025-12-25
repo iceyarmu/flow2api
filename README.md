@@ -246,10 +246,10 @@ curl -X POST "http://localhost:8000/v1/chat/completions" \
 
 支持标准的 OpenAI `/v1/images/generations` 接口格式。
 
-**支持的尺寸:**
-- `1792x1024` - 横屏 (landscape)
-- `1024x1792` - 竖屏 (portrait)
-- `1024x1024` - 正方形 (默认使用横屏模型)
+**尺寸自动判断横竖屏:**
+- 宽 > 高 → 横屏 (landscape)，如 `1792x1024`、`1920x1080`
+- 高 > 宽 → 竖屏 (portrait)，如 `1024x1792`、`1080x1920`
+- 宽 == 高 → 默认横屏，如 `1024x1024`
 
 **支持的模型 (可省略 `-landscape`/`-portrait` 后缀，由 `size` 决定):**
 - `gemini-2.5-flash-image` (默认)
