@@ -1,5 +1,5 @@
 """API routes - OpenAI compatible endpoints"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
 from fastapi.responses import StreamingResponse, JSONResponse
 from typing import List, Optional
 import base64
@@ -366,6 +366,168 @@ async def create_image(
                 image_bytes = await retrieve_image_data(result_url)
                 if image_bytes:
                     result_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to download image for b64_json response")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to convert image to base64: {str(e)}")
+
+            return JSONResponse(content={
+                "created": created_timestamp,
+                "data": [
+                    {
+                        "b64_json": result_b64
+                    }
+                ]
+            })
+        else:
+            # 默认返回URL格式
+            return JSONResponse(content={
+                "created": created_timestamp,
+                "data": [
+                    {
+                        "url": result_url
+                    }
+                ]
+            })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/v1/images/edits")
+async def edit_image(
+    image: List[UploadFile] = File(..., description="要编辑的图片文件（支持多个）"),
+    prompt: str = Form(..., description="描述如何编辑图片"),
+    mask: Optional[UploadFile] = File(None, description="遮罩图片（可选，用于局部编辑）"),
+    model: Optional[str] = Form("gemini-2.5-flash-image", description="模型名称"),
+    n: Optional[int] = Form(1, description="生成数量（目前仅支持1）"),
+    size: Optional[str] = Form("1792x1024", description="尺寸，如 1792x1024"),
+    response_format: Optional[str] = Form("url", description="响应格式: url 或 b64_json"),
+    api_key: str = Depends(verify_api_key_header)
+):
+    """Edit image (OpenAI compatible endpoint)
+
+    使用 multipart/form-data 格式上传图片进行编辑（图生图）。
+    支持上传多张图片作为参考。
+
+    支持的尺寸 (自动根据宽高判断横竖屏):
+    - 宽 > 高: landscape (横屏)
+    - 高 > 宽: portrait (竖屏)
+    - 宽 == 高: 默认 landscape
+
+    支持的模型 (可省略 -landscape/-portrait 后缀，由 size 决定):
+    - gemini-2.5-flash-image
+    - gemini-3.0-pro-image
+    - imagen-4.0-generate-preview
+    """
+    try:
+        # 读取上传的图片（支持多个）
+        images_bytes: List[bytes] = []
+        for img in image:
+            img_bytes = await img.read()
+            if img_bytes:
+                images_bytes.append(img_bytes)
+
+        if not images_bytes:
+            raise HTTPException(status_code=400, detail="No valid image files provided")
+
+        # 读取遮罩图片（如果有）- 目前暂不使用，保留接口兼容性
+        mask_bytes = None
+        if mask:
+            mask_bytes = await mask.read()
+
+        # 1. 尝试从 size 解析方向 (优先级最高)
+        orientation = parse_size_orientation(size)
+
+        # 2. 如果 size 无法确定方向（正方形或无效），尝试从 model 后缀获取
+        if orientation is None and model:
+            orientation = get_model_orientation_suffix(model)
+
+        # 3. 如果仍无法确定，默认使用 landscape
+        if orientation is None:
+            orientation = "landscape"
+
+        # 获取模型基础名称
+        model_base = get_model_base_name(model) if model else DEFAULT_MODEL_BASE
+
+        # 根据方向拼接完整模型名
+        full_model = f"{model_base}-{orientation}"
+
+        # 验证模型是否支持
+        if full_model not in MODEL_CONFIG:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported model: {full_model}. Available image models: " +
+                       ", ".join([k for k, v in MODEL_CONFIG.items() if v["type"] == "image"])
+            )
+
+        # 验证模型类型是否为图片
+        if MODEL_CONFIG[full_model]["type"] != "image":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {full_model} is not an image generation model"
+            )
+
+        # 验证生成数量 (目前仅支持1)
+        if n and n != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Currently only n=1 is supported"
+            )
+
+        # 调用生成处理器 (必须使用流式模式，传入图片进行图生图)
+        result_url = None
+        error_message = None
+
+        async for chunk in generation_handler.handle_generation(
+            model=full_model,
+            prompt=prompt,
+            images=images_bytes,  # 传入图片列表进行图生图
+            stream=True
+        ):
+            # 解析流式响应
+            if chunk.startswith("data: "):
+                try:
+                    data = json.loads(chunk[6:])
+
+                    # 检查是否有错误
+                    if "error" in data:
+                        error_message = data["error"].get("message", "Unknown error")
+                        break
+
+                    # 提取最终内容 (包含图片URL的Markdown)
+                    if "choices" in data and len(data["choices"]) > 0:
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        finish_reason = data["choices"][0].get("finish_reason")
+
+                        if finish_reason == "stop" and content:
+                            # 从Markdown格式中提取图片URL
+                            # 格式: ![Generated Image](http://...)
+                            match = re.search(r"!\[.*?\]\((.*?)\)", content)
+                            if match:
+                                result_url = match.group(1)
+                except json.JSONDecodeError:
+                    continue
+
+        # 检查是否有错误
+        if error_message:
+            raise HTTPException(status_code=500, detail=error_message)
+
+        if not result_url:
+            raise HTTPException(status_code=500, detail="Image edit failed: No URL returned")
+
+        # 构建响应
+        created_timestamp = int(time.time())
+
+        if response_format == "b64_json":
+            # 下载图片并转换为base64
+            try:
+                result_bytes = await retrieve_image_data(result_url)
+                if result_bytes:
+                    result_b64 = base64.b64encode(result_bytes).decode("utf-8")
                 else:
                     raise HTTPException(status_code=500, detail="Failed to download image for b64_json response")
             except Exception as e:

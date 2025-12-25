@@ -307,6 +307,57 @@ curl -X POST "http://localhost:8000/v1/images/generations" \
   }'
 ```
 
+### OpenAI 兼容图生图接口
+
+支持标准的 OpenAI `/v1/images/edits` 接口格式，使用 `multipart/form-data` 上传图片。
+**支持上传多张图片作为参考。**
+
+**单图编辑:**
+
+```bash
+curl -X POST "http://localhost:8000/v1/images/edits" \
+  -H "Authorization: Bearer han1234" \
+  -F "image=@/path/to/image.png" \
+  -F "prompt=将这张图片变成水彩画风格" \
+  -F "size=1792x1024"
+```
+
+**多图参考 (上传多个 image 字段):**
+
+```bash
+curl -X POST "http://localhost:8000/v1/images/edits" \
+  -H "Authorization: Bearer han1234" \
+  -F "image=@/path/to/image1.png" \
+  -F "image=@/path/to/image2.png" \
+  -F "prompt=融合这两张图片的风格" \
+  -F "size=1792x1024"
+```
+
+**响应示例:**
+
+```json
+{
+  "created": 1735128000,
+  "data": [
+    {
+      "url": "http://localhost:8000/tmp/xxx.png"
+    }
+  ]
+}
+```
+
+**指定模型和返回 Base64:**
+
+```bash
+curl -X POST "http://localhost:8000/v1/images/edits" \
+  -H "Authorization: Bearer han1234" \
+  -F "image=@/path/to/image.png" \
+  -F "prompt=添加一个可爱的卡通太阳" \
+  -F "model=gemini-3.0-pro-image" \
+  -F "size=1024x1792" \
+  -F "response_format=b64_json"
+```
+
 ---
 
 ## 📄 许可证
