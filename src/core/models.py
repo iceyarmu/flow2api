@@ -163,6 +163,15 @@ class ChatCompletionRequest(BaseModel):
     video: Optional[str] = None  # Base64 encoded video (deprecated)
 
 
+class ImageGenerationRequest(BaseModel):
+    """Image generation request (OpenAI compatible /v1/images/generations)"""
+    prompt: str
+    model: Optional[str] = "gemini-2.5-flash-image"  # 默认模型 (可省略 -landscape/-portrait，由 size 决定)
+    n: Optional[int] = 1  # 生成数量 (目前仅支持1)
+    size: Optional[str] = "1792x1024"  # 尺寸: "1024x1792" (portrait) 或 "1792x1024" (landscape)
+    response_format: Optional[str] = "url"  # "url" 或 "b64_json"
+
+
 class ErrorResponse(BaseModel):
     """Standard error response model"""
     error: dict

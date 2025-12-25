@@ -242,6 +242,71 @@ curl -X POST "http://localhost:8000/v1/chat/completions" \
   }'
 ```
 
+### OpenAI 兼容文生图接口
+
+支持标准的 OpenAI `/v1/images/generations` 接口格式。
+
+**支持的尺寸:**
+- `1792x1024` - 横屏 (landscape)
+- `1024x1792` - 竖屏 (portrait)
+- `1024x1024` - 正方形 (默认使用横屏模型)
+
+**支持的模型 (可省略 `-landscape`/`-portrait` 后缀，由 `size` 决定):**
+- `gemini-2.5-flash-image` (默认)
+- `gemini-3.0-pro-image`
+- `imagen-4.0-generate-preview`
+
+**基本用法 (返回 URL):**
+
+```bash
+curl -X POST "http://localhost:8000/v1/images/generations" \
+  -H "Authorization: Bearer han1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "一只可爱的猫咪在花园里玩耍",
+    "size": "1792x1024"
+  }'
+```
+
+**响应示例:**
+
+```json
+{
+  "created": 1735128000,
+  "data": [
+    {
+      "url": "http://localhost:8000/tmp/xxx.png"
+    }
+  ]
+}
+```
+
+**返回 Base64 格式:**
+
+```bash
+curl -X POST "http://localhost:8000/v1/images/generations" \
+  -H "Authorization: Bearer han1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "一只可爱的猫咪在花园里玩耍",
+    "size": "1024x1792",
+    "response_format": "b64_json"
+  }'
+```
+
+**指定模型 (size 优先决定横竖屏):**
+
+```bash
+curl -X POST "http://localhost:8000/v1/images/generations" \
+  -H "Authorization: Bearer han1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "一只可爱的猫咪在花园里玩耍",
+    "model": "imagen-4.0-generate-preview",
+    "size": "1024x1792"
+  }'
+```
+
 ---
 
 ## 📄 许可证

@@ -9,7 +9,7 @@ import time
 from urllib.parse import urlparse
 from curl_cffi.requests import AsyncSession
 from ..core.auth import verify_api_key_header
-from ..core.models import ChatCompletionRequest
+from ..core.models import ChatCompletionRequest, ImageGenerationRequest
 from ..services.generation_handler import GenerationHandler, MODEL_CONFIG
 from ..core.logger import debug_logger
 
@@ -205,6 +205,157 @@ async def create_chat_completion(
                     return JSONResponse(content={"result": result})
             else:
                 raise HTTPException(status_code=500, detail="Generation failed: No response from handler")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 尺寸到方向的映射
+SIZE_TO_ORIENTATION = {
+    "1792x1024": "landscape",  # 横屏
+    "1024x1792": "portrait",   # 竖屏
+    "1024x1024": "landscape",  # 正方形默认使用横屏模型
+}
+
+# 默认模型基础名
+DEFAULT_MODEL_BASE = "gemini-2.5-flash-image"
+
+
+def get_model_base_name(model: str) -> str:
+    """获取模型的基础名称（去除 -landscape/-portrait 后缀）"""
+    if model.endswith("-landscape"):
+        return model[:-10]  # 去除 "-landscape"
+    elif model.endswith("-portrait"):
+        return model[:-9]   # 去除 "-portrait"
+    return model
+
+
+@router.post("/v1/images/generations")
+async def create_image(
+    request: ImageGenerationRequest,
+    api_key: str = Depends(verify_api_key_header)
+):
+    """Create image (OpenAI compatible endpoint)
+
+    支持的尺寸:
+    - 1792x1024 (landscape, 横屏)
+    - 1024x1792 (portrait, 竖屏)
+    - 1024x1024 (默认使用横屏模型)
+
+    支持的模型 (可省略 -landscape/-portrait 后缀，由 size 决定):
+    - gemini-2.5-flash-image / gemini-2.5-flash-image-landscape / gemini-2.5-flash-image-portrait
+    - gemini-3.0-pro-image / gemini-3.0-pro-image-landscape / gemini-3.0-pro-image-portrait
+    - imagen-4.0-generate-preview / imagen-4.0-generate-preview-landscape / imagen-4.0-generate-preview-portrait
+    """
+    try:
+        # 根据 size 确定方向 (size 优先)
+        orientation = SIZE_TO_ORIENTATION.get(request.size, "landscape")
+
+        # 获取模型基础名称
+        model_base = get_model_base_name(request.model) if request.model else DEFAULT_MODEL_BASE
+
+        # 根据方向拼接完整模型名
+        model = f"{model_base}-{orientation}"
+
+        # 验证模型是否支持
+        if model not in MODEL_CONFIG:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported model: {model}. Available image models: " +
+                       ", ".join([k for k, v in MODEL_CONFIG.items() if v["type"] == "image"])
+            )
+
+        # 验证模型类型是否为图片
+        if MODEL_CONFIG[model]["type"] != "image":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {model} is not an image generation model"
+            )
+
+        # 验证生成数量 (目前仅支持1)
+        if request.n and request.n != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Currently only n=1 is supported"
+            )
+
+        # 调用生成处理器 (必须使用流式模式)
+        result_url = None
+        result_b64 = None
+        error_message = None
+
+        async for chunk in generation_handler.handle_generation(
+            model=model,
+            prompt=request.prompt,
+            images=None,
+            stream=True
+        ):
+            # 解析流式响应
+            if chunk.startswith("data: "):
+                try:
+                    data = json.loads(chunk[6:])
+
+                    # 检查是否有错误
+                    if "error" in data:
+                        error_message = data["error"].get("message", "Unknown error")
+                        break
+
+                    # 提取最终内容 (包含图片URL的Markdown)
+                    if "choices" in data and len(data["choices"]) > 0:
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        finish_reason = data["choices"][0].get("finish_reason")
+
+                        if finish_reason == "stop" and content:
+                            # 从Markdown格式中提取图片URL
+                            # 格式: ![Generated Image](http://...)
+                            match = re.search(r"!\[.*?\]\((.*?)\)", content)
+                            if match:
+                                result_url = match.group(1)
+                except json.JSONDecodeError:
+                    continue
+
+        # 检查是否有错误
+        if error_message:
+            raise HTTPException(status_code=500, detail=error_message)
+
+        if not result_url:
+            raise HTTPException(status_code=500, detail="Image generation failed: No URL returned")
+
+        # 构建响应
+        created_timestamp = int(time.time())
+
+        if request.response_format == "b64_json":
+            # 下载图片并转换为base64
+            try:
+                image_bytes = await retrieve_image_data(result_url)
+                if image_bytes:
+                    result_b64 = base64.b64encode(image_bytes).decode("utf-8")
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to download image for b64_json response")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to convert image to base64: {str(e)}")
+
+            return JSONResponse(content={
+                "created": created_timestamp,
+                "data": [
+                    {
+                        "b64_json": result_b64
+                    }
+                ]
+            })
+        else:
+            # 默认返回URL格式
+            return JSONResponse(content={
+                "created": created_timestamp,
+                "data": [
+                    {
+                        "url": result_url
+                    }
+                ]
+            })
 
     except HTTPException:
         raise
